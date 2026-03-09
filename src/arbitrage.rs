@@ -242,6 +242,7 @@ async fn execute_leg(
                 PolySide::Buy,
                 leg.price,
                 TRADE_SIZE,
+                config.polymarket_signature_type,
             )
             .await
         }

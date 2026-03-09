@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use alloy::signers::Signer;
 use alloy::signers::local::LocalSigner;
-use polymarket_client_sdk::clob::types::Side;
+use polymarket_client_sdk::clob::types::{Side, SignatureType};
 use polymarket_client_sdk::clob::Client;
 use polymarket_client_sdk::types::{Decimal, U256};
 use polymarket_client_sdk::POLYGON;
@@ -14,18 +14,21 @@ use tracing::info;
 /// - `side`: Buy or Sell
 /// - `price`: Decimal price 0.01-0.99
 /// - `size`: Size in USDC
+/// - `signature_type`: Eoa, Proxy, or GnosisSafe
 pub async fn place_order(
     private_key: &str,
     token_id: &str,
     side: Side,
     price: Decimal,
     size: Decimal,
+    signature_type: SignatureType,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let signer = LocalSigner::from_str(private_key)?
         .with_chain_id(Some(POLYGON));
 
     let client = Client::new("https://clob.polymarket.com", Default::default())?
         .authentication_builder(&signer)
+        .signature_type(signature_type)
         .authenticate()
         .await?;
 

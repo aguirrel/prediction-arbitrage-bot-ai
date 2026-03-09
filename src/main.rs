@@ -14,6 +14,11 @@ use crate::types::PlatformUpdate;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Install rustls crypto provider before any TLS connections
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("Failed to install rustls crypto provider");
+
     // Initialize tracing
     tracing_subscriber::fmt()
         .with_env_filter(

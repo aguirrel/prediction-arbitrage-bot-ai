@@ -3,69 +3,65 @@ use kalshi_rs::websocket::models::{
 };
 use kalshi_rs::{Account, KalshiWebsocketClient};
 use rust_decimal::Decimal;
-use std::collections::BTreeMap;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
 use crate::types::{KalshiBestAsks, PlatformUpdate};
 
 /// Local orderbook maintained from WS snapshots and deltas.
-/// Maps price (in cents, 1-99) -> quantity for each side.
+///
+/// Prices are in cents (1-99), stored in fixed arrays indexed by price.
+/// No-side prices arrive from the API in yes-equivalent terms (e.g. api_price=60
+/// means actual cost to buy no = 100-60 = 40¢), so we invert on write.
+/// YES ASK = 100 − best NO bid (lowest stored index in self.no).
+/// NO ASK  = 100 − best YES bid (highest stored index in self.yes).
 struct LocalOrderbook {
-    yes: BTreeMap<u8, i64>,
-    no: BTreeMap<u8, i64>,
+    yes: [i64; 101],
+    no: [i64; 101],
 }
 
 impl LocalOrderbook {
     fn new() -> Self {
         Self {
-            yes: BTreeMap::new(),
-            no: BTreeMap::new(),
+            yes: [0; 101],
+            no: [0; 101],
         }
     }
 
     fn apply_snapshot(&mut self, msg: &OrderbookSnapshotMessage) {
-        self.yes.clear();
-        self.no.clear();
+        self.yes = [0; 101];
+        self.no = [0; 101];
 
         if let Some(ref yes_levels) = msg.yes {
             for &(price, qty) in yes_levels {
-                if qty > 0 {
-                    self.yes.insert(price, qty);
-                }
+                self.yes[price as usize] = qty;
             }
         }
         if let Some(ref no_levels) = msg.no {
             for &(price, qty) in no_levels {
-                if qty > 0 {
-                    self.no.insert(price, qty);
-                }
+                self.no[(100 - price) as usize] = qty;
             }
         }
     }
 
     fn apply_delta(&mut self, msg: &kalshi_rs::websocket::models::OrderbookDeltaMessage) {
-        let book = match msg.side.as_str() {
-            "yes" => &mut self.yes,
-            "no" => &mut self.no,
-            _ => return,
-        };
-
-        let entry = book.entry(msg.price).or_insert(0);
-        *entry += msg.delta;
-        if *entry <= 0 {
-            book.remove(&msg.price);
+        match msg.side.as_str() {
+            "yes" => self.yes[msg.price as usize] += msg.delta,
+            "no" => self.no[(100 - msg.price) as usize] += msg.delta,
+            _ => {}
         }
     }
 
-    /// Returns the best (lowest) ask price for Yes side in cents.
+    /// YES ASK = 100 − best NO bid. NO bids are stored at `100 - api_price`,
+    /// so the lowest occupied index in self.no is `100 - highest_no_bid` = YES ASK.
     fn best_yes_ask(&self) -> Option<u8> {
-        self.yes.keys().next().copied()
+        (1u8..100).find(|&p| self.no[p as usize] > 0)
     }
 
-    /// Returns the best (lowest) ask price for No side in cents.
+    /// NO ASK = 100 − best YES bid. YES bids are stored at their actual price,
+    /// so the highest occupied index in self.yes gives the best yes bid.
     fn best_no_ask(&self) -> Option<u8> {
-        self.no.keys().next().copied()
+        (1u8..100).rev().find(|&p| self.yes[p as usize] > 0).map(|p| 100 - p)
     }
 
     /// Convert cents to Decimal (0.01-0.99)
