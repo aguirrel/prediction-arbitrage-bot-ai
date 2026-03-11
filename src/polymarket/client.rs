@@ -26,65 +26,68 @@ pub async fn run(
     );
 
     let ws_client = ws::Client::default();
+    let both = vec![token_a, token_b];
 
-    // Subscribe to orderbook updates for both tokens
-    let stream_a = ws_client.subscribe_orderbook(vec![token_a])?;
-    let stream_b = ws_client.subscribe_orderbook(vec![token_b])?;
+    // Book events: full snapshot on subscribe + after trades/cancellations
+    let book_stream = ws_client.subscribe_orderbook(both.clone())?;
+    // Price-change events: fires whenever the best bid/ask changes
+    let price_stream = ws_client.subscribe_prices(both)?;
 
-    info!("Polymarket WS: subscribed to orderbook for both outcomes");
+    info!("Polymarket WS: subscribed to orderbook + prices for both outcomes");
 
-    // Track current best asks for each outcome
     let mut best_ask_a: Option<Decimal> = None;
     let mut best_ask_b: Option<Decimal> = None;
 
-    let mut stream_a = Box::pin(stream_a);
-    let mut stream_b = Box::pin(stream_b);
+    let mut book_stream = Box::pin(book_stream);
+    let mut price_stream = Box::pin(price_stream);
 
     loop {
         tokio::select! {
-            Some(result) = stream_a.next() => {
+            Some(result) = book_stream.next() => {
                 match result {
                     Ok(book) => {
-                        if let Some(ask) = book.asks.first() {
-                            best_ask_a = Some(ask.price);
-                            debug!(ask_a = %ask.price, "Polymarket: outcome A best ask");
-                        } else {
-                            best_ask_a = None;
+                        let best_ask = book.asks.iter().map(|l| l.price).min();
+                        info!(
+                            asset_id = %book.asset_id,
+                            best_ask = ?best_ask,
+                            asks_len = book.asks.len(),
+                            bids_len = book.bids.len(),
+                            "Polymarket: book snapshot"
+                        );
+                        if book.asset_id == token_a {
+                            best_ask_a = best_ask;
+                        } else if book.asset_id == token_b {
+                            best_ask_b = best_ask;
                         }
-
-                        if let (Some(a), Some(b)) = (best_ask_a, best_ask_b) {
-                            let update = PolyBestAsks { outcome_a: a, outcome_b: b };
-                            if tx.send(PlatformUpdate::Polymarket(update)).await.is_err() {
-                                info!("Polymarket WS: receiver dropped, shutting down");
-                                return Ok(());
-                            }
-                        }
+                        maybe_send(&mut best_ask_a, &mut best_ask_b, &tx).await?;
                     }
                     Err(e) => {
-                        warn!(error = %e, "Polymarket WS: stream A error");
+                        warn!(error = %e, "Polymarket WS: book stream error");
                     }
                 }
             }
-            Some(result) = stream_b.next() => {
+            Some(result) = price_stream.next() => {
                 match result {
-                    Ok(book) => {
-                        if let Some(ask) = book.asks.first() {
-                            best_ask_b = Some(ask.price);
-                            debug!(ask_b = %ask.price, "Polymarket: outcome B best ask");
-                        } else {
-                            best_ask_b = None;
-                        }
-
-                        if let (Some(a), Some(b)) = (best_ask_a, best_ask_b) {
-                            let update = PolyBestAsks { outcome_a: a, outcome_b: b };
-                            if tx.send(PlatformUpdate::Polymarket(update)).await.is_err() {
-                                info!("Polymarket WS: receiver dropped, shutting down");
-                                return Ok(());
+                    Ok(price_change) => {
+                        for entry in &price_change.price_changes {
+                            // best_ask is explicitly present when the ask side changes
+                            if let Some(ask) = entry.best_ask {
+                                debug!(
+                                    asset_id = %entry.asset_id,
+                                    best_ask = %ask,
+                                    "Polymarket: price_change best ask"
+                                );
+                                if entry.asset_id == token_a {
+                                    best_ask_a = Some(ask);
+                                } else if entry.asset_id == token_b {
+                                    best_ask_b = Some(ask);
+                                }
                             }
                         }
+                        maybe_send(&mut best_ask_a, &mut best_ask_b, &tx).await?;
                     }
                     Err(e) => {
-                        warn!(error = %e, "Polymarket WS: stream B error");
+                        warn!(error = %e, "Polymarket WS: price stream error");
                     }
                 }
             }
@@ -95,5 +98,19 @@ pub async fn run(
         }
     }
 
+    Ok(())
+}
+
+async fn maybe_send(
+    best_ask_a: &mut Option<Decimal>,
+    best_ask_b: &mut Option<Decimal>,
+    tx: &mpsc::Sender<PlatformUpdate>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if let (Some(a), Some(b)) = (*best_ask_a, *best_ask_b) {
+        let update = PolyBestAsks { outcome_a: a, outcome_b: b };
+        if tx.send(PlatformUpdate::Polymarket(update)).await.is_err() {
+            info!("Polymarket WS: receiver dropped, shutting down");
+        }
+    }
     Ok(())
 }
