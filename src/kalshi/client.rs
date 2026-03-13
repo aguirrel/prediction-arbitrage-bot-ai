@@ -1,10 +1,26 @@
 use kalshi_rs::websocket::models::{
-    KalshiSocketMessage, OrderbookDelta, OrderbookSnapshot, OrderbookSnapshotMessage,
+    KalshiSocketMessage, OrderbookDelta, OrderbookDeltaMessage, OrderbookSnapshot,
+    OrderbookSnapshotMessage,
 };
 use kalshi_rs::{Account, KalshiWebsocketClient};
 use rust_decimal::Decimal;
+use serde::Deserialize;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
+
+/// New Kalshi delta format: price as dollar string, delta as float string.
+#[derive(Deserialize)]
+struct NewDeltaOuter {
+    msg: NewDeltaMsg,
+}
+
+#[derive(Deserialize)]
+struct NewDeltaMsg {
+    market_ticker: String,
+    price_dollars: String,
+    delta_fp: String,
+    side: String,
+}
 
 use crate::types::{KalshiBestAsks, PlatformUpdate};
 
@@ -166,6 +182,26 @@ pub async fn run(
                         warn!("Kalshi WS: connection closed, reconnecting...");
                         break;
                     }
+                    KalshiSocketMessage::Unparseable(raw) => {
+                        // Kalshi changed delta format: price_dollars + delta_fp instead of price + delta.
+                        // Try to parse it manually before giving up.
+                        if let Some(delta_msg) = parse_new_delta_format(&raw, &ticker_a, &ticker_b)
+                        {
+                            if delta_msg.market_ticker == ticker_a {
+                                book_a.apply_delta(&delta_msg);
+                            } else if delta_msg.market_ticker == ticker_b {
+                                book_b.apply_delta(&delta_msg);
+                            }
+                            if let Some(update) = build_update(&book_a, &book_b) {
+                                if tx.send(PlatformUpdate::Kalshi(update)).await.is_err() {
+                                    info!("Kalshi WS: receiver dropped, shutting down");
+                                    return Ok(());
+                                }
+                            }
+                        } else {
+                            debug!("Kalshi WS: unhandled message: Unparseable({raw})");
+                        }
+                    }
                     other => {
                         debug!("Kalshi WS: unhandled message: {:?}", other);
                     }
@@ -182,6 +218,40 @@ pub async fn run(
         book_b = LocalOrderbook::new();
         tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     }
+}
+
+/// Parse the new Kalshi delta format (price_dollars + delta_fp) into an
+/// `OrderbookDeltaMessage` compatible with the existing apply_delta logic.
+/// Returns None if the raw string is not a delta message for our tickers or fails to parse.
+fn parse_new_delta_format(
+    raw: &str,
+    ticker_a: &str,
+    ticker_b: &str,
+) -> Option<OrderbookDeltaMessage> {
+    let outer: NewDeltaOuter = serde_json::from_str(raw).ok()?;
+    let m = outer.msg;
+
+    if m.market_ticker != ticker_a && m.market_ticker != ticker_b {
+        return None;
+    }
+
+    // price_dollars e.g. "0.3300" → 33 cents
+    let price_f: f64 = m.price_dollars.parse().ok()?;
+    let price = (price_f * 100.0).round() as u8;
+
+    // delta_fp e.g. "-30000.00" → -30000
+    let delta_f: f64 = m.delta_fp.parse().ok()?;
+    let delta = delta_f.round() as i64;
+
+    Some(OrderbookDeltaMessage {
+        market_ticker: m.market_ticker,
+        market_id: String::new(),
+        price,
+        price_dollars: m.price_dollars,
+        delta,
+        side: m.side,
+        ts: String::new(),
+    })
 }
 
 /// Build a KalshiBestAsks only if we have all 4 prices.

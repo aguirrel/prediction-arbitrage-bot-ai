@@ -1,4 +1,5 @@
 mod arbitrage;
+mod balances;
 mod config;
 mod kalshi;
 mod polymarket;
@@ -37,6 +38,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         kalshi_ticker_b = %config.kalshi_market_ticker_b,
         "Starting arbitrage bot"
     );
+
+    balances::check_and_log(&config).await;
 
     // Create channel for platform updates
     let (tx, rx) = mpsc::channel::<PlatformUpdate>(256);

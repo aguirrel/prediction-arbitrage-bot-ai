@@ -78,8 +78,11 @@ pub async fn run(
         //   - Kalshi: buy Market-B Yes           (price: k.market_b_yes)
         //   - Kalshi: buy Market-A No (A loses)  (price: k.market_a_no)
 
+        // Evaluate strategies in order; stop at the first one that fires.
+        // All four share legs so executing more than one would double-spend.
+
         // Strategy 1: Poly A + Kalshi Market-B Yes
-        check_and_execute(
+        let fired = check_and_execute(
             TradeLeg {
                 platform: Platform::Polymarket,
                 description: "Poly A".into(),
@@ -100,7 +103,7 @@ pub async fn run(
         .await;
 
         // Strategy 2: Poly A + Kalshi Market-A No (A loses = B wins)
-        check_and_execute(
+        let fired = fired || check_and_execute(
             TradeLeg {
                 platform: Platform::Polymarket,
                 description: "Poly A".into(),
@@ -121,7 +124,7 @@ pub async fn run(
         .await;
 
         // Strategy 3: Kalshi Market-A Yes + Poly B
-        check_and_execute(
+        let fired = fired || check_and_execute(
             TradeLeg {
                 platform: Platform::Kalshi,
                 description: "Mkt-A Yes".into(),
@@ -142,46 +145,58 @@ pub async fn run(
         .await;
 
         // Strategy 4: Kalshi Market-B No (B loses = A wins) + Poly B
-        check_and_execute(
-            TradeLeg {
-                platform: Platform::Kalshi,
-                description: "Mkt-B No".into(),
-                market_id: config.kalshi_market_ticker_b.clone(),
-                side: "no".into(),
-                price: k.market_b_no,
-            },
-            TradeLeg {
-                platform: Platform::Polymarket,
-                description: "Poly B".into(),
-                market_id: config.polymarket_asset_id_b.clone(),
-                side: "buy".into(),
-                price: p.outcome_b,
-            },
-            config,
-            &kalshi_client,
-        )
-        .await;
+        let fired = fired || {
+            if !fired {
+                check_and_execute(
+                    TradeLeg {
+                        platform: Platform::Kalshi,
+                        description: "Mkt-B No".into(),
+                        market_id: config.kalshi_market_ticker_b.clone(),
+                        side: "no".into(),
+                        price: k.market_b_no,
+                    },
+                    TradeLeg {
+                        platform: Platform::Polymarket,
+                        description: "Poly B".into(),
+                        market_id: config.polymarket_asset_id_b.clone(),
+                        side: "buy".into(),
+                        price: p.outcome_b,
+                    },
+                    config,
+                    &kalshi_client,
+                )
+                .await
+            } else {
+                false
+            }
+        };
+
+        if fired && config.exit_after_first_trade {
+            info!("EXIT_AFTER_FIRST_TRADE is set — shutting down after first trade");
+            return Ok(());
+        }
     }
 
     info!("Arbitrage detector: channel closed, shutting down");
     Ok(())
 }
 
+/// Returns `true` if an opportunity was found (and execution attempted), `false` otherwise.
 async fn check_and_execute(
     leg_a_wins: TradeLeg,
     leg_b_wins: TradeLeg,
     config: &Config,
     kalshi_client: &KalshiClient,
-) {
+) -> bool {
     let total_cost = leg_a_wins.price + leg_b_wins.price + TOTAL_FEE_ESTIMATE;
 
     if total_cost >= Decimal::ONE {
-        return;
+        return false;
     }
 
     let profit = Decimal::ONE - total_cost;
     if profit < MIN_PROFIT {
-        return;
+        return false;
     }
 
     let opportunity = ArbitrageOpportunity {
@@ -217,6 +232,8 @@ async fn check_and_execute(
             }
         }
     }
+
+    true
 }
 
 async fn execute_leg(

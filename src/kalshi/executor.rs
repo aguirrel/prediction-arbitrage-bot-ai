@@ -1,6 +1,7 @@
 use kalshi_rs::portfolio::models::CreateOrderRequest;
 use kalshi_rs::KalshiClient;
 use polymarket_client_sdk::auth::Uuid;
+use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use tracing::{error, info};
 
@@ -18,9 +19,9 @@ pub async fn place_order(
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     // Convert decimal price to cents (e.g., 0.45 -> 45)
     let price_cents = (price * Decimal::from(100))
-        .to_string()
-        .parse::<u64>()
-        .map_err(|e| format!("Invalid price conversion: {e}"))?;
+        .round()
+        .to_u64()
+        .ok_or_else(|| format!("Invalid price conversion: {price} out of range"))?;
 
     let (yes_price, no_price) = match side {
         "yes" => (Some(price_cents), None),

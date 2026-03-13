@@ -13,6 +13,8 @@ pub struct Config {
     pub polymarket_asset_id_a: String,
     pub polymarket_asset_id_b: String,
     pub polymarket_signature_type: SignatureType,
+    /// If true, exit after the first arbitrage trade is sent (useful for testing).
+    pub exit_after_first_trade: bool,
 }
 
 impl Config {
@@ -29,6 +31,11 @@ impl Config {
             _ => SignatureType::Eoa,
         };
 
+        let exit_after_first_trade = env::var("EXIT_AFTER_FIRST_TRADE")
+            .unwrap_or_default()
+            .to_lowercase()
+            == "true";
+
         Ok(Self {
             kalshi_api_key_id: env::var("KALSHI_API_KEY_ID")?,
             kalshi_pem_path: env::var("KALSHI_PEM_PATH")?,
@@ -38,6 +45,7 @@ impl Config {
             polymarket_asset_id_a: env::var("POLYMARKET_ASSET_ID_A")?,
             polymarket_asset_id_b: env::var("POLYMARKET_ASSET_ID_B")?,
             polymarket_signature_type: signature_type,
+            exit_after_first_trade,
         })
     }
 }
