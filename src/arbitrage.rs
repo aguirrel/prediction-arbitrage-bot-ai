@@ -22,10 +22,6 @@ const TOTAL_FEE_ESTIMATE: Decimal = dec!(0.04);
 /// Minimum profit threshold to execute a trade
 const MIN_PROFIT: Decimal = dec!(0.005);
 
-/// Default trade quantity (contracts) for Kalshi
-const TRADE_QUANTITY: u64 = 10;
-/// Default trade size in USDC for Polymarket
-const TRADE_SIZE: Decimal = dec!(10.0);
 
 pub async fn run(
     config: &Config,
@@ -248,7 +244,7 @@ async fn execute_leg(
                 &leg.market_id,
                 &leg.side,
                 leg.price,
-                TRADE_QUANTITY,
+                config.trade_quantity,
             )
             .await
         }
@@ -258,7 +254,7 @@ async fn execute_leg(
                 &leg.market_id,
                 PolySide::Buy,
                 leg.price,
-                TRADE_SIZE,
+                Decimal::from(config.trade_quantity),
                 config.polymarket_signature_type,
             )
             .await

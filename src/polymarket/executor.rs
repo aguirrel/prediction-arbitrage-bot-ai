@@ -20,7 +20,7 @@ pub async fn place_order(
     token_id: &str,
     side: Side,
     price: Decimal,
-    size: Decimal,
+    quantity: Decimal,
     signature_type: SignatureType,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     let signer = LocalSigner::from_str(private_key)?
@@ -35,11 +35,17 @@ pub async fn place_order(
     let token = U256::from_str(token_id)
         .map_err(|e| format!("Invalid token_id: {e}"))?;
 
+    // Use 0.99 as the limit price so the order always executes immediately
+    // against any available ask. The arbitrage price is only used for opportunity
+    // detection; at execution time we are willing to pay up to 99¢.
+    let fill_price = Decimal::from_str("0.99").unwrap();
+
     info!(
         token_id = token_id,
         side = ?side,
-        price = %price,
-        size = %size,
+        detected_price = %price,
+        fill_price = %fill_price,
+        quantity = %quantity,
         "Polymarket: placing order"
     );
 
@@ -47,8 +53,8 @@ pub async fn place_order(
         .limit_order()
         .token_id(token)
         .side(side)
-        .price(price)
-        .size(size)
+        .price(fill_price)
+        .size(quantity)
         .build()
         .await?;
 

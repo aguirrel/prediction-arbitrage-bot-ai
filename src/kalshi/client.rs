@@ -24,6 +24,8 @@ struct NewDeltaMsg {
 
 use crate::types::{KalshiBestAsks, PlatformUpdate};
 
+use std::time::{Duration, Instant};
+
 /// Local orderbook maintained from WS snapshots and deltas.
 ///
 /// Prices are in cents (1-99), stored in fixed arrays indexed by price.
@@ -94,6 +96,7 @@ pub async fn run(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut book_a = LocalOrderbook::new();
     let mut book_b = LocalOrderbook::new();
+    let mut last_log = Instant::now() - Duration::from_secs(10);
 
     loop {
         info!(
@@ -136,13 +139,16 @@ pub async fn run(
                         }
 
                         if let Some(update) = build_update(&book_a, &book_b) {
-                            debug!(
-                                a_yes = %update.market_a_yes,
-                                a_no = %update.market_a_no,
-                                b_yes = %update.market_b_yes,
-                                b_no = %update.market_b_no,
-                                "Kalshi best asks"
-                            );
+                            if last_log.elapsed() >= Duration::from_secs(10) {
+                                info!(
+                                    a_yes = %update.market_a_yes,
+                                    a_no = %update.market_a_no,
+                                    b_yes = %update.market_b_yes,
+                                    b_no = %update.market_b_no,
+                                    "Kalshi best asks"
+                                );
+                                last_log = Instant::now();
+                            }
                             if tx.send(PlatformUpdate::Kalshi(update)).await.is_err() {
                                 info!("Kalshi WS: receiver dropped, shutting down");
                                 return Ok(());
@@ -157,6 +163,16 @@ pub async fn run(
                         }
 
                         if let Some(update) = build_update(&book_a, &book_b) {
+                            if last_log.elapsed() >= Duration::from_secs(10) {
+                                info!(
+                                    a_yes = %update.market_a_yes,
+                                    a_no = %update.market_a_no,
+                                    b_yes = %update.market_b_yes,
+                                    b_no = %update.market_b_no,
+                                    "Kalshi best asks"
+                                );
+                                last_log = Instant::now();
+                            }
                             if tx.send(PlatformUpdate::Kalshi(update)).await.is_err() {
                                 info!("Kalshi WS: receiver dropped, shutting down");
                                 return Ok(());
@@ -193,6 +209,16 @@ pub async fn run(
                                 book_b.apply_delta(&delta_msg);
                             }
                             if let Some(update) = build_update(&book_a, &book_b) {
+                                if last_log.elapsed() >= Duration::from_secs(10) {
+                                    info!(
+                                        a_yes = %update.market_a_yes,
+                                        a_no = %update.market_a_no,
+                                        b_yes = %update.market_b_yes,
+                                        b_no = %update.market_b_no,
+                                        "Kalshi best asks"
+                                    );
+                                    last_log = Instant::now();
+                                }
                                 if tx.send(PlatformUpdate::Kalshi(update)).await.is_err() {
                                     info!("Kalshi WS: receiver dropped, shutting down");
                                     return Ok(());

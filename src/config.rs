@@ -15,6 +15,10 @@ pub struct Config {
     pub polymarket_signature_type: SignatureType,
     /// If true, exit after the first arbitrage trade is sent (useful for testing).
     pub exit_after_first_trade: bool,
+    /// Number of contracts to trade per leg (applies to both Kalshi and Polymarket).
+    /// Kalshi: contracts (each pays $1 if wins).
+    /// Polymarket: outcome tokens/shares (each pays $1 if wins).
+    pub trade_quantity: u64,
 }
 
 impl Config {
@@ -46,6 +50,10 @@ impl Config {
             polymarket_asset_id_b: env::var("POLYMARKET_ASSET_ID_B")?,
             polymarket_signature_type: signature_type,
             exit_after_first_trade,
+            trade_quantity: env::var("TRADE_QUANTITY")
+                .unwrap_or_else(|_| "10".into())
+                .parse()
+                .unwrap_or(10),
         })
     }
 }

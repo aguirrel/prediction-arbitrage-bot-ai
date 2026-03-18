@@ -1,7 +1,6 @@
 use kalshi_rs::portfolio::models::CreateOrderRequest;
 use kalshi_rs::KalshiClient;
 use polymarket_client_sdk::auth::Uuid;
-use rust_decimal::prelude::ToPrimitive;
 use rust_decimal::Decimal;
 use tracing::{error, info};
 
@@ -17,11 +16,11 @@ pub async fn place_order(
     price: Decimal,
     quantity: u64,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    // Convert decimal price to cents (e.g., 0.45 -> 45)
-    let price_cents = (price * Decimal::from(100))
-        .round()
-        .to_u64()
-        .ok_or_else(|| format!("Invalid price conversion: {price} out of range"))?;
+    // Use 99 cents as the limit price so the order always executes immediately
+    // against any available ask. The arbitrage price is only used for opportunity
+    // detection; at execution time we are willing to pay up to 99¢.
+    let _ = price;
+    let price_cents: u64 = 99;
 
     let (yes_price, no_price) = match side {
         "yes" => (Some(price_cents), None),
@@ -41,7 +40,7 @@ pub async fn place_order(
         yes_price_dollars: None,
         no_price_dollars: None,
         expiration_ts: None,
-        time_in_force: Some("gtc".to_string()),
+        time_in_force: Some("good_till_canceled".to_string()),
         buy_max_cost: None,
         post_only: None,
         reduce_only: None,
