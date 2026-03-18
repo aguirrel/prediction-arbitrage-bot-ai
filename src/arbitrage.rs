@@ -6,10 +6,12 @@ use tracing::{debug, info, warn};
 use crate::config::Config;
 use crate::kalshi::executor as kalshi_exec;
 use crate::polymarket::executor as poly_exec;
+use crate::polymarket::executor::PolyClient;
 use crate::types::{
     ArbitrageOpportunity, KalshiBestAsks, Platform, PlatformUpdate, PolyBestAsks, TradeLeg,
 };
 
+use alloy::signers::local::PrivateKeySigner;
 use kalshi_rs::{Account, KalshiClient};
 use polymarket_client_sdk::clob::types::Side as PolySide;
 
@@ -32,6 +34,15 @@ pub async fn run(
 
     let kalshi_account = Account::from_file(&config.kalshi_pem_path, &config.kalshi_api_key_id)?;
     let kalshi_client = KalshiClient::new(kalshi_account);
+
+    let (poly_client, poly_signer) = poly_exec::create_client(
+        &config.polymarket_private_key,
+        &config.polymarket_asset_id_a,
+        &config.polymarket_asset_id_b,
+        config.polymarket_signature_type,
+        config.trade_quantity,
+    )
+    .await?;
 
     info!("Arbitrage detector: running");
 
@@ -95,6 +106,8 @@ pub async fn run(
             },
             config,
             &kalshi_client,
+            &poly_client,
+            &poly_signer,
         )
         .await;
 
@@ -116,6 +129,8 @@ pub async fn run(
             },
             config,
             &kalshi_client,
+            &poly_client,
+            &poly_signer,
         )
         .await;
 
@@ -137,6 +152,8 @@ pub async fn run(
             },
             config,
             &kalshi_client,
+            &poly_client,
+            &poly_signer,
         )
         .await;
 
@@ -160,6 +177,8 @@ pub async fn run(
                     },
                     config,
                     &kalshi_client,
+                    &poly_client,
+                    &poly_signer,
                 )
                 .await
             } else {
@@ -183,6 +202,8 @@ async fn check_and_execute(
     leg_b_wins: TradeLeg,
     config: &Config,
     kalshi_client: &KalshiClient,
+    poly_client: &PolyClient,
+    poly_signer: &PrivateKeySigner,
 ) -> bool {
     let total_cost = leg_a_wins.price + leg_b_wins.price + TOTAL_FEE_ESTIMATE;
 
@@ -206,8 +227,8 @@ async fn check_and_execute(
 
     // Execute both legs in parallel
     let (result_a, result_b) = tokio::join!(
-        execute_leg(&leg_a_wins, config, kalshi_client),
-        execute_leg(&leg_b_wins, config, kalshi_client),
+        execute_leg(&leg_a_wins, config, kalshi_client, poly_client, poly_signer),
+        execute_leg(&leg_b_wins, config, kalshi_client, poly_client, poly_signer),
     );
 
     match (&result_a, &result_b) {
@@ -236,6 +257,8 @@ async fn execute_leg(
     leg: &TradeLeg,
     config: &Config,
     kalshi_client: &KalshiClient,
+    poly_client: &PolyClient,
+    poly_signer: &PrivateKeySigner,
 ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
     match leg.platform {
         Platform::Kalshi => {
@@ -250,12 +273,12 @@ async fn execute_leg(
         }
         Platform::Polymarket => {
             poly_exec::place_order(
-                &config.polymarket_private_key,
+                poly_client,
+                poly_signer,
                 &leg.market_id,
                 PolySide::Buy,
                 leg.price,
                 Decimal::from(config.trade_quantity),
-                config.polymarket_signature_type,
             )
             .await
         }
